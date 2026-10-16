@@ -1,0 +1,18 @@
+.env
+.venv/
+__pycache__/
+web/node_modules/
+web/dist/
+data/
+# local agent tooling and planning notes
+.agents/
+.claude/
+.planning/
+.playwright-mcp/
+skills-lock.json
+/DEMO_EXAMPLE.md
+/HACK.md
+/IDEAS.md
+/UNDER_THE_HOOD.md
+evidence/
+*.log

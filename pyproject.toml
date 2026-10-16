@@ -1,0 +1,23 @@
+[project]
+name = "taxagent"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi",
+  "uvicorn",
+  "python-multipart",
+  "policyengine-us",
+  "surrealdb",
+  "openpyxl",
+  "daytona",
+  "arize-otel",
+  "python-dotenv",
+  "langchain-aws>=1.9.0",
+  "openinference-instrumentation-langchain>=0.1.79",
+  "deepagents>=0.7.26",
+]
+
+[dependency-groups]
+dev = [
+    "rapidocr-onnxruntime>=1.4.4",
+]
