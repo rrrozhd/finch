@@ -131,3 +131,15 @@
     font-feature-settings: "tnum";
     }
 }
+/* Indeterminate progress (value={null}): Base UI gives the indicator no width, so slide a bar instead. */
+[data-slot="progress-indicator"][data-indeterminate] {
+  width: 40%;
+  animation: progress-slide 1.4s ease-in-out infinite;
+}
+@keyframes progress-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="progress-indicator"][data-indeterminate] { animation: none; width: 100%; opacity: 0.5; }
+}

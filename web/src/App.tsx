@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Upload as UploadIcon, Loader2, Send, ShieldCheck, Calculator, Link2, Check, Sparkles, FileArchive, ChevronDown } from 'lucide-react'
-import { api, money, type Next, type UploadResponse } from '@/lib/api'
+import { api, money, type Inferred, type Next, type Review, type UploadResponse } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -8,7 +8,8 @@ import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { ResultsView } from '@/Results'
+import { ResultsView, SourceTable } from '@/Results'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
 
 type Stage = 'upload' | 'questions' | 'results'
@@ -16,10 +17,19 @@ type Stage = 'upload' | 'questions' | 'results'
 export default function App() {
   const [stage, setStage] = useState<Stage>('upload')
   const [up, setUp] = useState<UploadResponse | null>(null)
+  const [reached, setReached] = useState(0) // furthest step unlocked; earlier steps stay clickable
+  const [answered, setAnswered] = useState(false) // all questions done: show the confirm-before-compute review
+  const [computeRun, setComputeRun] = useState(0) // bumped on each confirm so results recompute after edits
+  const go = (s: Stage) => {
+    setStage(s)
+    setReached((r) => Math.max(r, STAGES.indexOf(s)))
+  }
 
   const onUploaded = (r: UploadResponse) => {
     setUp(r)
-    setStage(r.next ? 'questions' : 'results')
+    setReached(0)
+    setAnswered(!r.next)
+    go('questions')
   }
 
   return (
@@ -35,20 +45,34 @@ export default function App() {
               <p className="text-xs text-muted-foreground">NYC 1099 freelancers · Form 1040-ES + NY IT-2105</p>
             </div>
           </div>
-          <Steps stage={stage} />
+          <Steps stage={stage} reached={up ? reached : 0} onPick={setStage} />
         </div>
       </header>
       <main className="mx-auto max-w-5xl space-y-6 px-4 py-8">
         {stage === 'upload' && <UploadStage onDone={onUploaded} />}
         {up && stage !== 'upload' && <Summary up={up} />}
-        {up && stage === 'questions' && <Chat session={up.session} first={up.next} onDone={() => setStage('results')} />}
-        {up && stage === 'results' && <ResultsView session={up.session} />}
+        {/* kept mounted while hidden, so going back and forth keeps the chat and results state */}
+        {up && (
+          <div hidden={stage !== 'questions'}>
+            <Chat key={up.session} session={up.session} first={up.next} inferred={up.summary.inferred ?? []} onDone={() => setAnswered(true)} />
+            {answered && (
+              <ConfirmReview key={up.session} session={up.session} onConfirm={() => (setComputeRun((n) => n + 1), go('results'))} />
+            )}
+          </div>
+        )}
+        {up && reached >= 2 && (
+          <div hidden={stage !== 'results'}>
+            <ResultsView key={`${up.session}-${computeRun}`} session={up.session} />
+          </div>
+        )}
       </main>
     </div>
   )
 }
 
-function Steps({ stage }: { stage: Stage }) {
+const STAGES: Stage[] = ['upload', 'questions', 'results']
+
+function Steps({ stage, reached, onPick }: { stage: Stage; reached: number; onPick: (s: Stage) => void }) {
   const all: [Stage, string][] = [['upload', 'Upload'], ['questions', 'Questions'], ['results', 'Results']]
   const idx = all.findIndex(([s]) => s === stage)
   return (
@@ -56,6 +80,12 @@ function Steps({ stage }: { stage: Stage }) {
       {all.map(([s, label], i) => (
         <li key={s} className="flex items-center gap-2" aria-current={i === idx ? 'step' : undefined}>
           {i > 0 && <span className={cn('h-px w-6', i <= idx ? 'bg-primary' : 'bg-border')} />}
+          <button
+            type="button"
+            disabled={i > reached}
+            onClick={() => onPick(s)}
+            className="flex items-center gap-2 rounded-md enabled:cursor-pointer enabled:hover:opacity-80 focus-visible:outline-2 focus-visible:outline-ring"
+          >
           <span
             className={cn(
               'grid size-6 place-items-center rounded-full border text-xs font-medium',
@@ -67,6 +97,7 @@ function Steps({ stage }: { stage: Stage }) {
             {i < idx ? <Check className="size-3.5" /> : i + 1}
           </span>
           <span className={i <= idx ? 'font-medium' : 'text-muted-foreground'}>{label}</span>
+          </button>
         </li>
       ))}
     </ol>
@@ -263,9 +294,78 @@ function quickReplies(field: string | undefined): string[] {
   return []
 }
 
-function Chat({ session, first, onDone }: { session: string; first: Next; onDone: () => void }) {
+const FIELD_LABELS: Record<string, string> = {
+  state: 'State', in_nyc: 'Lives in NYC', filing_status: 'Filing status', line_of_work: 'Line of work',
+  prior_fed_tax: '2025 federal tax', prior_fed_agi: '2025 AGI', prior_ny_tax: '2025 NY + NYC tax',
+}
+
+function ConfirmReview({ session, onConfirm }: { session: string; onConfirm: () => void }) {
+  const [r, setR] = useState<Review | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [open, setOpen] = useState(false)
+  const load = () => api.review(session).then(setR, (e) => setErr(String(e)))
+  useEffect(() => void load(), [session])
+
+  if (err) return <p className="mt-4 text-sm text-destructive">{err}</p>
+  if (!r) return <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Gathering what we'll use…</p>
+  return (
+    <Card className="mt-6 shadow-sm">
+      <CardHeader>
+        <CardTitle>Review before we compute</CardTitle>
+        <CardDescription>This is everything the tax engine will use. Fix anything wrong now; nothing is computed until you confirm.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <Stat label="Transactions" value={r.transactions} />
+          <Stat label="Income found" value={money(r.gross_income)} />
+          <Stat label="Deductible expenses" value={money(r.deductible_expenses)} />
+        </div>
+        <Table>
+          <TableBody>
+            {r.profile.map((p) => (
+              <TableRow key={p.field}>
+                <TableCell className="font-medium">{FIELD_LABELS[p.field] ?? p.field}</TableCell>
+                <TableCell>{typeof p.value === 'number' ? money(p.value) : String(p.value)}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">{p.by === 'inferred' ? `read from ${p.source}` : 'you told us'}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        {r.guessed.length > 0 && (
+          <div className="flex flex-col gap-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <span>We labeled <strong>{r.guessed.length}</strong> transactions on a best guess. Only you know these for sure.</span>
+            <Button variant="outline" size="sm" onClick={() => setOpen(true)}>Review guesses</Button>
+          </div>
+        )}
+        <div className="flex justify-end">
+          <Button onClick={onConfirm}><Calculator /> Looks right, compute my taxes</Button>
+        </div>
+      </CardContent>
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-2xl">
+          <SheetHeader>
+            <SheetTitle>Guessed labels to review</SheetTitle>
+            <SheetDescription>Fix a row to record a correction. Facts supersede, never overwrite.</SheetDescription>
+          </SheetHeader>
+          <SourceTable session={session} rows={r.guessed} fixable onChanged={load} />
+        </SheetContent>
+      </Sheet>
+    </Card>
+  )
+}
+
+function foundMessage(inferred: Inferred[]): Msg[] {
+  if (!inferred.length) return []
+  const lines = inferred.map((f) => `• ${FIELD_LABELS[f.field] ?? f.field}: ${typeof f.value === 'number' ? money(f.value) : f.value}  (${f.source})`)
+  return [{ who: 'agent', text: `I read these from your files, so I won't ask:\n${lines.join('\n')}` }]
+}
+
+function Chat({ session, first, inferred, onDone }: { session: string; first: Next; inferred: Inferred[]; onDone: () => void }) {
   const [next, setNext] = useState<Next>(first)
-  const [msgs, setMsgs] = useState<Msg[]>(first ? [{ who: 'agent', text: first.question }] : [])
+  const [msgs, setMsgs] = useState<Msg[]>([
+    ...foundMessage(inferred),
+    first ? { who: 'agent', text: first.question } : { who: 'agent', text: 'Nothing else to ask. Check the review below before I compute.' },
+  ])
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [answered, setAnswered] = useState(0)
@@ -288,7 +388,11 @@ function Chat({ session, first, onDone }: { session: string; first: Next; onDone
         return
       }
       setAnswered((n) => n + 1)
-      if (!r.next) return onDone()
+      if (!r.next) {
+        setNext(null)
+        setMsgs((m) => [...m, { who: 'agent', text: 'That’s everything. Check the review below before I compute.' }])
+        return onDone()
+      }
       setNext(r.next)
       setMsgs((m) => [...m, { who: 'agent', text: r.next!.question }])
     } catch (err) {
@@ -320,7 +424,7 @@ function Chat({ session, first, onDone }: { session: string; first: Next; onDone
                 )}
                 <div
                   className={cn(
-                    'max-w-[80%] rounded-2xl px-3.5 py-2 text-sm shadow-xs',
+                    'max-w-[80%] whitespace-pre-wrap rounded-2xl px-3.5 py-2 text-sm shadow-xs',
                     m.who === 'user' ? 'rounded-br-sm bg-primary text-primary-foreground' : 'rounded-bl-sm border bg-card',
                   )}
                 >

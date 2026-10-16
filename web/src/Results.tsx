@@ -166,7 +166,7 @@ const BY_STYLE: Record<string, string> = {
   user: 'bg-accent text-accent-foreground',
 }
 
-function SourceTable({ session, rows, fixable, onChanged }: { session: string; rows: SourceRow[]; fixable: boolean; onChanged: () => void }) {
+export function SourceTable({ session, rows, fixable, onChanged }: { session: string; rows: SourceRow[]; fixable: boolean; onChanged: () => void }) {
   const [fixing, setFixing] = useState<string | null>(null)
   const [history, setHistory] = useState<Record<string, HistoryRow[]>>({})
   if (!rows.length) return <p className="px-4 text-sm text-muted-foreground">No source rows.</p>

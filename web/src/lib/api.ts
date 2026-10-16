@@ -4,9 +4,11 @@ export type Receipt = { file: string; confidence: number; path: 'ocr' | 'vision'
 
 export type UploadResponse = {
   session: string
-  summary: { transactions: number; receipts: Receipt[]; rules: number; llm_merchants: number }
+  summary: { transactions: number; receipts: Receipt[]; rules: number; llm_merchants: number; documents?: number; inferred?: Inferred[] }
   next: Next
 }
+
+export type Inferred = { field: string; value: string | number; source: string }
 
 export type AnswerResponse = { ok: boolean; clarify?: string; unsupported?: boolean; next: Next }
 
@@ -81,8 +83,17 @@ export const api = {
   results: (session: string) => req<Results>(`/api/results/${encodeURIComponent(session)}`),
   correct: (b: { session: string; key: string; category: string; business_pct: number; reason: string; same_merchant?: boolean }) =>
     req<{ history: HistoryRow[] }>('/api/correct', json({ ...b, schedule_c_category: null })),
+  review: (session: string) => req<Review>(`/api/review/${encodeURIComponent(session)}`),
   chat: (session: string, text: string) => req<AgentReply>('/api/chat', json({ session, text })),
   resume: (session: string, approve: boolean) => req<AgentReply>('/api/chat/resume', json({ session, approve })),
+}
+
+export type Review = {
+  profile: { field: string; value: string | number; source: string; by: string }[]
+  guessed: SourceRow[]
+  gross_income: number
+  deductible_expenses: number
+  transactions: number
 }
 
 export type AgentReply = { reply?: string; pending?: { tool: string; args: Record<string, unknown> }[] }
