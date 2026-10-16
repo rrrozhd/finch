@@ -1,6 +1,6 @@
-# Quarterly Tax Copilot
+# Finch
 
-An agent that works out a NYC freelancer's quarterly estimated taxes (federal 1040-ES and NYS/NYC IT-2105) from a zip of bank exports and receipts.
+Finch is an agent that works out a NYC freelancer's quarterly estimated taxes (federal 1040-ES and NYS/NYC IT-2105) from a zip of bank exports and receipts.
 
 You drop in your files, answer seven profile questions, and get the next payment for each authority, with every dollar traced back to the source rows. The app never pays or files anything. It links to IRS Direct Pay and NYS Online Services and stops there.
 

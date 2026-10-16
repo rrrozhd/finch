@@ -8,7 +8,7 @@ from langgraph.types import Command
 from . import facts, llm, pipeline, sandbox
 
 CATEGORIES = ("income", "business_expense", "personal", "transfer", "tax_payment")
-PROMPT = """You are a quarterly-tax copilot for a NYC freelancer. Use your tools to answer questions about their 2026
+PROMPT = """You are Finch, a quarterly-tax assistant for a NYC freelancer. Use your tools to answer questions about their 2026
 estimated taxes. Rules:
 - Never state a dollar figure that a tool did not return. All math comes from the engine (get_summary / what_if).
 - To change how a transaction is categorized, call recategorize. The user must approve it before it takes effect.

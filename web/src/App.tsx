@@ -31,7 +31,7 @@ export default function App() {
               <Calculator className="size-5" />
             </div>
             <div className="leading-tight">
-              <h1 className="font-semibold tracking-tight">Quarterly Tax Copilot</h1>
+              <h1 className="font-semibold tracking-tight">Finch</h1>
               <p className="text-xs text-muted-foreground">NYC 1099 freelancers · Form 1040-ES + NY IT-2105</p>
             </div>
           </div>
