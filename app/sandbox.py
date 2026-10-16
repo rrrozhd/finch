@@ -52,6 +52,8 @@ def sandbox():
                               on_snapshot_create_logs=lambda l: print("[daytona]", l, end=""))
             sb.fs.upload_file(WORKER.read_bytes(), "/home/daytona/sandbox_worker.py")
             sb.fs.upload_file(ENGINE.read_bytes(), "/home/daytona/engine.py")
+            for w in WORKER.parent.glob("vendor/*.whl"):
+                sb.fs.upload_file(w.read_bytes(), f"/home/daytona/{w.name}")
             _sandbox = sb  # only cache a sandbox that started; a failed start retries on the next call
     return _sandbox
 

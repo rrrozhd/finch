@@ -85,9 +85,19 @@ def ocr(p: Path) -> dict:
                 needs_vision=needs_vision, text=text[:2000], source=p.name)
 
 
+def doc_text(p: Path) -> str:
+    """Plain text of a PDF/markdown/text document (prior-year returns, contracts, notes), for profile inference."""
+    if p.suffix.lower() != ".pdf":
+        return p.read_text(errors="replace")[:4000]
+    here = Path(__file__).parent  # pypdf ships as a wheel next to the worker: the sandbox image has no PDF library
+    sys.path.insert(0, str(next(w for d in (here, here / "vendor") for w in d.glob("pypdf-*.whl"))))
+    from pypdf import PdfReader
+    return "\n".join(pg.extract_text() or "" for pg in PdfReader(p).pages[:3])[:4000]
+
+
 def main(zpath: str, outdir: str):
     files = safe_extract(Path(zpath), Path(outdir))
-    out = dict(transactions=[], sheets=[], receipts=[], skipped=[])
+    out = dict(transactions=[], sheets=[], receipts=[], docs=[], skipped=[])
     for p in files:
         ext = p.suffix.lower()
         if ext == ".csv":
@@ -96,6 +106,11 @@ def main(zpath: str, outdir: str):
             out["sheets"].append(dict(file=p.name, rows=parse_xlsx(p)))
         elif ext in (".png", ".jpg", ".jpeg"):
             out["receipts"].append(ocr(p))
+        elif ext in (".pdf", ".md", ".txt") and "_answer_key" not in p.parts:
+            try:
+                out["docs"].append(dict(file=p.name, text=doc_text(p)))
+            except Exception as e:  # one unreadable document must not fail the whole upload
+                out["skipped"].append(f"{p.name} ({type(e).__name__})")
         else:
             out["skipped"].append(p.name)
     print(json.dumps(out, default=str))
