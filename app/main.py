@@ -77,6 +77,11 @@ def results(session: str):
     return out
 
 
+@app.get("/api/review/{session}")
+def review(session: str):
+    return pipeline.review(session)
+
+
 class Correction(BaseModel):
     session: str
     key: str

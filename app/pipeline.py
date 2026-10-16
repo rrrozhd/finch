@@ -63,6 +63,7 @@ def ingest(session: str, zip_bytes: bytes) -> dict:
         for row in s["rows"]:
             facts.put(session, f"sheet:{row['source']}", {k: v for k, v in row.items() if k != "source"}, row["source"], "intake")
 
+    inferred = _infer_profile(session, x.get("docs", []))  # before categorizing, so line_of_work is known
     txns = x["transactions"]
     matched = _match_receipts(txns, receipts)
     unknown = defaultdict(lambda: dict(examples=[], has_receipt=False, receipt_items=None))
@@ -90,7 +91,29 @@ def ingest(session: str, zip_bytes: bytes) -> dict:
             else:
                 _put_txn(session, t, c.category, c.schedule_c_category, c.business_pct, "llm", matched.get(t["id"]), c.why)
     return dict(transactions=len(txns), receipts=[{k: r[k] for k in ("file", "confidence", "path", "total", "date")} for r in receipts],
-                rules=sum(1 for t in txns if _merchant(t["description"]) not in unknown), llm_merchants=len(unknown))
+                rules=sum(1 for t in txns if _merchant(t["description"]) not in unknown), llm_merchants=len(unknown),
+                documents=len(x.get("docs", [])), inferred=inferred)
+
+
+def _infer_profile(session: str, docs: list[dict]) -> list[dict]:
+    """Checklist answers the documents state outright become facts (by='inferred', citing the file); the rest are asked."""
+    if not docs:
+        return []
+    with tracer.start_as_current_span("profile.infer", attributes=CHAIN) as sp:
+        found = llm.infer_profile(docs, dict(CHECKLIST))
+        files = {d["file"] for d in docs}
+        out = []
+        for f in found:
+            v = _quick_parse(f.field, f.value) if f.field != "line_of_work" else f.value.strip()
+            if v is None or f.source_file not in files or (f.field == "state" and v != "NY") \
+                    or (f.field == "filing_status" and v != "single"):
+                continue  # unreadable, uncited or out of scope: ask the user instead
+            if f.field in NUMERIC:
+                v = float(v)
+            facts.put(session, f"profile:{f.field}", v, f.source_file, "inferred", f.quote)
+            out.append(dict(field=f.field, value=v, source=f.source_file))
+        sp.set_attribute("output.value", json.dumps(out))
+        return out
 
 
 def _merchant(desc: str) -> str:
@@ -131,10 +154,31 @@ def next_question(session: str):
     for field, hint in CHECKLIST:
         if field not in p:
             return dict(field=field, question=llm.word_question(field, hint))
-    return None
+    return _merchant_question(session)
+
+
+MAX_MERCHANT_QUESTIONS = 3  # ask only about the biggest guesses; the rest stay flagged for review on the results page
+
+
+def _merchant_question(session: str):
+    if len(facts.current(session, "asked:")) >= MAX_MERCHANT_QUESTIONS:
+        return None
+    spend = defaultdict(list)
+    for k, v in facts.current(session, "txn:").items():
+        if v["by"] == "llm-guess" and v["value"]["amount"] < 0:
+            spend[_merchant(v["value"]["description"])].append(v["value"])
+    if not spend:
+        return None
+    m, rows = max(spend.items(), key=lambda kv: -sum(r["amount"] for r in kv[1]))
+    guess = "business" if rows[0]["category"] == "business_expense" else "personal"
+    n, total = len(rows), -sum(r["amount"] for r in rows)
+    return dict(field=f"merchant:{m}", question=f"You have {n} charge{'s' if n > 1 else ''} at {m} (${total:,.2f}). "
+                f"I guessed {guess}. Was it for your business? (business / personal)")
 
 
 def answer(session: str, field: str, text: str) -> dict:
+    if field.startswith("merchant:"):
+        return _answer_merchant(session, field[9:], text)
     hint = dict(CHECKLIST)[field]
     v = _quick_parse(field, text)  # deterministic first; the LLM only sees answers rules can't read
     with tracer.start_as_current_span("answer.parse", attributes=CHAIN) as sp:
@@ -154,6 +198,22 @@ def answer(session: str, field: str, text: str) -> dict:
     if field == "filing_status" and v != "single":
         return dict(ok=False, unsupported=True, clarify="This demo only computes for single filers so far.")
     facts.put(session, f"profile:{field}", v, "chat", "user", text)
+    return dict(ok=True)
+
+
+def _answer_merchant(session: str, merchant: str, text: str) -> dict:
+    words = re.findall(r"[a-z]+", text.lower())
+    biz = bool(words) and words[0] in ("business", "b", "yes", "y", "work")
+    if not words or not (biz or words[0] in ("personal", "p", "no", "n")):
+        return dict(ok=False, clarify="Was it business or personal?")
+    guessed = [(k, v["value"]) for k, v in facts.current(session, "txn:").items()
+               if v["by"] == "llm-guess" and _merchant(v["value"]["description"]) == merchant]
+    if guessed:
+        k, t = guessed[0]
+        pct = (t.get("business_pct") or 100) if biz else 0
+        correct(session, k, "business_expense" if biz else "personal", pct, t.get("schedule_c_category"), f"user said: {text}",
+                same_merchant=True)
+    facts.put(session, f"asked:merchant:{merchant}", "business" if biz else "personal", "chat", "user", text)
     return dict(ok=True)
 
 
@@ -198,6 +258,24 @@ def _label(t: dict) -> str:
     return f'business {t["business_pct"]}%' if t["category"] == "business_expense" else t["category"].replace("_", " ")
 
 
+def _guessed_rows(txns: dict) -> list[dict]:
+    return [dict(key=k, source=v["source"], by=v["by"], amount=v["value"]["amount"], merchant=_merchant(v["value"]["description"]),
+                 description=f'{v["value"]["description"]} · guessed {_label(v["value"])}')
+            for k, v in txns.items() if v["by"] == "llm-guess"]
+
+
+def review(session: str) -> dict:
+    """Everything the computation will use, for the user to confirm before any tax math runs."""
+    txns = facts.current(session, "txn:")
+    vals = [v["value"] for v in txns.values()]
+    return dict(profile=[dict(field=k.split(":", 1)[1], value=v["value"], source=v["source"], by=v["by"])
+                         for k, v in facts.current(session, "profile:").items()],
+                guessed=_guessed_rows(txns),
+                gross_income=round(sum(t["amount"] for t in vals if t["category"] == "income"), 2),
+                deductible_expenses=round(sum(t["deductible"] for t in vals if t["category"] == "business_expense"), 2),
+                transactions=len(vals))
+
+
 def results(session: str, as_of: date | None = None) -> dict:
     p = _profile(session)
     txns = {k: v for k, v in facts.current(session, "txn:").items()}
@@ -222,10 +300,7 @@ def results(session: str, as_of: date | None = None) -> dict:
         by_cat[v["value"].get("schedule_c_category") or "Other"] += v["value"]["deductible"]
     r.update(inputs=inputs, expense_by_category={k: round(v, 2) for k, v in by_cat.items()},
              sources=dict(gross_income=src(income), deductible_expenses=src(expenses), paid_fed=src(paid_fed), paid_ny=src(paid_ny),
-                          review=[dict(key=k, source=v["source"], by=v["by"], amount=v["value"]["amount"],
-                                       merchant=_merchant(v["value"]["description"]),
-                                       description=f'{v["value"]["description"]} · guessed {_label(v["value"])}')
-                                  for k, v in txns.items() if v["by"] == "llm-guess"]),
+                          review=_guessed_rows(txns)),
              pay_links=dict(federal="https://www.irs.gov/payments/direct-pay", ny="https://www.tax.ny.gov/pay/"),
              computed_at=datetime.now().isoformat(timespec="seconds"))
     return r
